@@ -1,33 +1,113 @@
 ﻿@page "/blog"
 @using blazor_blog.Models
+@using blazor_blog.Data
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<BlogContext> BlogContextFactory
+@inject ILogger<Blog> _logger;
 
 <h3>Blog</h3>
 
 @foreach (var entry in _blogEntries)
 {
-    <div>
-        <h3>@entry.Title</h3>
-        <p>@entry.PostedTime</p>
-        <p>@((MarkupString)entry.Content)</p>
-    </div>
+    <BlogEntryView Entry="@entry" OnDelete="@DeleteAsync" OnEdit="@EditAsync" />
 }
 
 
+
+<input type="hidden" @bind="id">
 <input placeholder="Title" @bind="title" />
 <input placeholder="Content" @bind="content" />
 <button @onclick="AddBlogEntry">Add</button>
 
-@code {
-    private IList<BlogEntry> _blogEntries = new List<BlogEntry>();
-    private string title = "", content = "";
 
-    private void AddBlogEntry()
+@code {
+    private List<BlogEntry> _blogEntries = new();
+    private string title = string.Empty, content = string.Empty;
+    private uint? id = null;
+
+    public async Task DeleteAsync(BlogEntry entry)
     {
+        using var ctx = BlogContextFactory.CreateDbContext();
+        ctx.Entries.Remove(entry);
+        await ctx.SaveChangesAsync();
+        await RefreshEntries();
+    }
+
+
+    public void EditAsync(BlogEntry entry)
+    {
+        title = entry.Title;
+        content = entry.Content;
+        id = entry.BlogEntryId;
+        //await RefreshEntries();
+    }
+
+    public async Task RefreshEntries()
+    {
+        _blogEntries.Clear();
+
+        using var ctx = BlogContextFactory.CreateDbContext();
+
+
+        var loadedEntries = await ctx.Entries
+        .OrderByDescending(e => e.PostedTime).ToListAsync();
+        _blogEntries.AddRange(loadedEntries);
+    }
+
+    private async void AddBlogEntry()
+    {
+        // check if actual content
         if (!string.IsNullOrWhiteSpace(title) && !string.IsNullOrWhiteSpace(content))
         {
-            _blogEntries.Add(new BlogEntry { Title = title, Content = content });
-            title = "";
-            content = "";
+            // context from factory
+            using var ctx = BlogContextFactory.CreateDbContext();
+
+            // make blogentry object
+            var be = new BlogEntry { Title = title, Content = content };
+
+            // add new beo to context for tracking
+            if (id == null)
+            {
+                ctx.Entries.Add(be);
+            }
+            else
+            { // edit
+                _logger.LogInformation("be " + be.BlogEntryId);
+                var mod = await ctx.Entries.Where(bentry => bentry.BlogEntryId == id).FirstOrDefaultAsync();
+                if (mod != null)
+                {
+                    _logger.LogInformation("mod " + mod.Content);
+                    mod.Title = be.Title;
+                    mod.Content = be.Content;
+
+                }
+
+            }
+
+            // save the new entry
+            if (await ctx.SaveChangesAsync() > 0)
+            {
+                // add new entry to beginning of app be list
+                _blogEntries.Insert(0, be);
+
+                // clear input fields
+                title = "";
+                content = string.Empty;
+                if (id != null)
+                {
+                    id = null;
+                    await RefreshEntries();
+                }
+            }
+
+
+
         }
     }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshEntries();
+    }
+
 }
